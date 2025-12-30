@@ -67,7 +67,7 @@ class ResiliencyTransformer:
         df["start_time"] = pd.to_datetime(df["start_time"])
         df["end_time"] = pd.to_datetime(df["end_time"])
 
-        # Remove duplicates based on key columns
+        # Remove duplicates based on key columns - presupposed an app cannot conduct duplicate scenario test in 24hrs
         df = df.drop_duplicates(
             subset=["app_id", "scenario_name", "start_time", "status"], keep="first"
         )

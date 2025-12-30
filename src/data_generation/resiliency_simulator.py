@@ -45,11 +45,32 @@ class ResiliencySimulator:
             scenario = random.choice(self.scenarios)
             status = random.choices(["passed", "failed"], weights=[0.85, 0.15])[0]
 
-            # Duration varies by status
+            # Duration varies by status and scenario type
             if status == "passed":
-                duration_ms = random.randint(100, 5000)
+                duration_ms = random.randint(100, 5000)  # Normal execution: 0.1-5 seconds
             else:
-                duration_ms = random.randint(1000, 30000)
+                # Realistic failure durations based on scenario type (enterprise MTTR benchmarks)
+                if scenario == "Database Failover":
+                    # Database failover typically takes 2-10 minutes
+                    duration_ms = random.randint(120000, 600000)
+                elif scenario == "Service Restart":
+                    # Service restart typically takes 1-5 minutes
+                    duration_ms = random.randint(60000, 300000)
+                elif scenario == "Network Latency":
+                    # Network issues can take 10-30 minutes to resolve
+                    duration_ms = random.randint(600000, 1800000)
+                elif scenario == "Memory Pressure":
+                    # Memory issues typically take 5-20 minutes to resolve
+                    duration_ms = random.randint(300000, 1200000)
+                elif scenario == "CPU Spike":
+                    # CPU spikes usually recover in 2-10 minutes
+                    duration_ms = random.randint(120000, 600000)
+                elif scenario == "Dependency Timeout":
+                    # Dependency timeouts: 5-15 minutes
+                    duration_ms = random.randint(300000, 900000)
+                else:
+                    # Default fallback for unknown scenarios
+                    duration_ms = random.randint(1000, 30000)
 
             start_time = date.replace(
                 hour=random.randint(0, 23),
