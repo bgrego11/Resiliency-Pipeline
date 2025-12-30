@@ -1,0 +1,1 @@
+"""Initialize data generation package."""
