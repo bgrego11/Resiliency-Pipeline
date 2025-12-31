@@ -59,16 +59,30 @@ resiliency-pipeline/
 
 ## Data Pipeline Flow
 
-### End-to-End Architecture
+### End-to-End Architecture 
 ```
-┌─────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────┐     ┌─────────────┐
-│   Extract   │────▶│  Transform   │────▶│  Validate    │────▶│   Load   │────▶│  Populate   │────▶┌─────────────┐
-│   (Generate)│     │   (Enrich)   │     │  (Quality)   │     │  (Raw)   │     │  (Staging)  │     │  Aggregate  │
-└─────────────┘     └──────────────┘     └──────────────┘     └──────────┘     └─────────────┘     │  (Metrics)  │
-                                                   │                                     │          └─────────────┘
-                                                   └──────────────┬───────────────────────┘
-                                                     (Parallel Execution)
+Raw Layer (Bronze)          Staging Layer (Silver)         Mart Layer (Gold)
+    ┌──────────┐                ┌──────────┐              ┌──────────────┐
+    │   raw    │   Enrich &     │   stg    │  Aggregate  │   fact       │
+    │ tests    │───Transform───▶│ tests    │────Data────▶│  metrics     │
+    │ (IDs)    │   (JOIN dims)  │ (Names)  │             │ (Aggregates) │
+    └──────────┘                └──────────┘              └──────────────┘
+         ▲
+         │
+    ┌────┴──────────────────────────────────────────────────────┐
+    │                                                            │
+ Extract ──▶ Transform ──▶ [Validate, Load Raw] ──▶ Populate Staging ──▶ Generate Metrics
+(Generate)   (Clean)      (Parallel Tasks)        (SQL JOINs)          (Aggregation)
+    │                           │
+    └───────── XCom Pass ────────┘
 ```
+
+**Data Flow:**
+1. **Extract** generates synthetic test data
+2. **Transform** cleans and validates in-memory
+3. **Validate & Load Raw** (parallel) - checks quality, then persists to raw layer with IDs only
+4. **Populate Staging** - SQL enrichment adds human-readable names via dimensions
+5. **Generate Metrics** - reads from staging, aggregates to create daily metrics
 
 ### Task Breakdown
 
@@ -96,25 +110,27 @@ Data quality checks on transformed data:
 - Returns: Quality check results or warnings
 
 #### 4. **Load Raw Data** (load_raw_data) - *Parallel*
-Persists cleaned data to raw table:
-- Inserts into `raw_resiliency_tests`
-- Maintains immutable audit trail
+Persists cleaned data to the raw (bronze) layer:
+- Inserts into `raw_resiliency_tests` with: test_id, app_id, scenario_id, timestamps, status, error_message
+- Does NOT include business-friendly names (app_name, scenario_name) - these are source system IDs only
+- Maintains immutable audit trail - raw layer is never modified
 - Returns: Number of rows inserted
 
 #### 5. **Populate Staging** (populate_staging)
-Enriches raw data with business context via SQL transformation:
-- LEFT JOINs raw_resiliency_tests with dim_test_scenarios to add scenario_name
-- LEFT JOINs raw_resiliency_tests with dim_applications to add app_name
-- Both joins use LEFT to preserve all raw records even if dimension lookups fail (data quality safeguard)
-- Inserts enriched records into `stg_resiliency_tests` with both scenario_id/app_id and their friendly names
-- Returns: Number of rows staged, with warnings if any dimension mismatches detected
+Enriches raw data from bronze to silver layer via SQL transformation:
+- Reads from `raw_resiliency_tests` (IDs only)
+- LEFT JOINs with `dim_applications` and `dim_test_scenarios` to add business context
+- Inserts enriched records into `stg_resiliency_tests` 
+- LEFT JOINs ensure all raw records are preserved even if dimension lookups fail (data quality safeguard)
+- Logs warnings if any records have unmapped scenario_ids or app_ids
+- Returns: Number of rows staged
 
 #### 6. **Generate Metrics** (generate_metrics)
-Aggregates daily metrics from staging:
-- Reads enriched data from `stg_resiliency_tests`
-- Groups by app_id and date
-- Calculates: total_tests, passed/failed counts, uptime %, MTTR, RTO compliance
-- Inserts into `fact_resiliency_metrics`
+Aggregates enriched data from silver to gold layer:
+- Reads complete, enriched records from `stg_resiliency_tests` 
+- Groups by app_id and test_date
+- Calculates daily metrics: total_tests, passed/failed counts, uptime_percentage, avg_duration_ms, MTTR, RTO_compliant
+- Inserts into `fact_resiliency_metrics` for reporting and dashboarding
 - Returns: Number of metric rows created
 
 ## Operational Commands
