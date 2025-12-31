@@ -148,6 +148,81 @@ class DatabaseConnection:
             print(f"Insert failed: {e}")
             raise
 
+    def upsert_records(
+        self, 
+        table: str, 
+        records: List[Dict[str, Any]], 
+        unique_keys: List[str],
+        schema: str = "resiliency",
+        update_columns: List[str] = None
+    ) -> int:
+        """
+        Upsert (insert or update) multiple records into a table.
+        
+        Handles idempotent operations - re-running produces same result.
+        Uses PostgreSQL ON CONFLICT ... DO UPDATE pattern.
+
+        Args:
+            table: Table name
+            records: List of dictionaries representing records
+            unique_keys: List of column names that form the unique constraint
+            schema: Schema name
+            update_columns: Columns to update on conflict (default: all except unique_keys)
+
+        Returns:
+            Number of rows affected
+        """
+        if not records:
+            return 0
+
+        if not self.connection:
+            self.connect()
+
+        try:
+            # Get all columns from first record
+            all_columns = list(records[0].keys())
+            
+            # Determine which columns to update (all except unique keys)
+            if update_columns is None:
+                update_columns = [col for col in all_columns if col not in unique_keys]
+            
+            # Build column list and placeholders
+            column_names = ",".join(all_columns)
+            placeholders = ",".join(["%s"] * len(all_columns))
+            
+            # Build the UPDATE clause (SET col = EXCLUDED.col for each update column)
+            update_clause = ",\n    ".join(
+                [f"{col} = EXCLUDED.{col}" for col in update_columns]
+            )
+            
+            # Build conflict clause
+            conflict_keys = ",".join(unique_keys)
+            
+            # Build complete upsert SQL
+            sql = f"""
+            INSERT INTO {schema}.{table} ({column_names})
+            VALUES %s
+            ON CONFLICT ({conflict_keys})
+            DO UPDATE SET
+                {update_clause}
+            """
+            
+            # Create values list from records
+            values = [tuple(r.get(col) for col in all_columns) for r in records]
+            
+            cursor = self.connection.cursor()
+            execute_values(cursor, sql, values, fetch=False)
+            self.connection.commit()
+            
+            rows_affected = len(records)
+            cursor.close()
+            
+            return rows_affected
+        except psycopg2.Error as e:
+            self.connection.rollback()
+            print(f"Upsert failed: {e}")
+            raise
+
     def __enter__(self):
         """Context manager entry."""
         self.connect()

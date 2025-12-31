@@ -21,8 +21,9 @@ class ResiliencyTransformer:
             True if valid, False otherwise
         """
         required_fields = [
+            "test_id",
             "app_id",
-            "scenario_name",
+            "scenario_id",
             "start_time",
             "end_time",
             "duration_ms",
@@ -67,9 +68,9 @@ class ResiliencyTransformer:
         df["start_time"] = pd.to_datetime(df["start_time"])
         df["end_time"] = pd.to_datetime(df["end_time"])
 
-        # Remove duplicates based on key columns - presupposed an app cannot conduct duplicate scenario test in 24hrs
+        # Remove duplicates based on key columns - test_id is globally unique
         df = df.drop_duplicates(
-            subset=["app_id", "scenario_name", "start_time", "status"], keep="first"
+            subset=["test_id"], keep="first"
         )
 
         # Sort by start_time

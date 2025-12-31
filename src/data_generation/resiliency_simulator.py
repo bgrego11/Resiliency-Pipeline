@@ -1,6 +1,7 @@
 """Data generation module for resiliency testing simulations."""
 
 import random
+import uuid
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import json
@@ -19,14 +20,6 @@ class ResiliencySimulator:
         """
         self.num_apps = num_apps
         self.num_tests_per_day = num_tests_per_day
-        self.scenarios = [
-            "Database Failover",
-            "Network Latency",
-            "Service Restart",
-            "Memory Pressure",
-            "CPU Spike",
-            "Dependency Timeout",
-        ]
 
     def generate_tests(self, date: datetime) -> List[Dict[str, Any]]:
         """
@@ -36,13 +29,14 @@ class ResiliencySimulator:
             date: Date for which to generate test data
 
         Returns:
-            List of test records
+            List of test records with test_id (UUID), scenario_id (normalized), and details
         """
         tests = []
 
         for _ in range(self.num_tests_per_day):
+            test_id = str(uuid.uuid4())  # Unique test identifier from source system
             app_id = random.randint(1, self.num_apps)
-            scenario = random.choice(self.scenarios)
+            scenario_id = random.randint(1, 6)  # Source provides scenario_id, not name
             status = random.choices(["passed", "failed"], weights=[0.85, 0.15])[0]
 
             # Duration varies by status and scenario type
@@ -50,22 +44,22 @@ class ResiliencySimulator:
                 duration_ms = random.randint(100, 5000)  # Normal execution: 0.1-5 seconds
             else:
                 # Realistic failure durations based on scenario type (enterprise MTTR benchmarks)
-                if scenario == "Database Failover":
+                if scenario_id == 1:  # Database Failover
                     # Database failover typically takes 2-10 minutes
                     duration_ms = random.randint(120000, 600000)
-                elif scenario == "Service Restart":
+                elif scenario_id == 3:  # Service Restart
                     # Service restart typically takes 1-5 minutes
                     duration_ms = random.randint(60000, 300000)
-                elif scenario == "Network Latency":
+                elif scenario_id == 2:  # Network Latency
                     # Network issues can take 10-30 minutes to resolve
                     duration_ms = random.randint(600000, 1800000)
-                elif scenario == "Memory Pressure":
+                elif scenario_id == 4:  # Memory Pressure
                     # Memory issues typically take 5-20 minutes to resolve
                     duration_ms = random.randint(300000, 1200000)
-                elif scenario == "CPU Spike":
+                elif scenario_id == 5:  # CPU Spike
                     # CPU spikes usually recover in 2-10 minutes
                     duration_ms = random.randint(120000, 600000)
-                elif scenario == "Dependency Timeout":
+                elif scenario_id == 6:  # Dependency Timeout
                     # Dependency timeouts: 5-15 minutes
                     duration_ms = random.randint(300000, 900000)
                 else:
@@ -95,8 +89,9 @@ class ResiliencySimulator:
                 metadata["retry_count"] = random.randint(1, 3)
 
             test_record = {
+                "test_id": test_id,  # Unique identifier from source system
                 "app_id": app_id,
-                "scenario_name": scenario,
+                "scenario_id": scenario_id,  # Source provides normalized ID
                 "start_time": start_time.isoformat(),
                 "end_time": end_time.isoformat(),
                 "duration_ms": duration_ms,

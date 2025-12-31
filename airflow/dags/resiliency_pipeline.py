@@ -122,13 +122,12 @@ def load_raw_data(**context) -> dict:
     # Prepare records for insertion (match table schema)
     records_to_insert = []
     for test in cleaned_tests:
-        # Convert ISO strings back to datetime for database
         record = {
+            "test_id": test["test_id"],
             "app_id": test["app_id"],
-            "scenario_name": test.get("scenario_name"),  # For JOIN in staging
-            "scenario_id": None,  # Will be set via JOIN in staging
-            "start_time": test["start_time"],  # Already ISO string, DB will parse
-            "end_time": test["end_time"],      # Already ISO string, DB will parse
+            "scenario_id": test["scenario_id"],  # Source provides normalized ID
+            "start_time": test["start_time"],
+            "end_time": test["end_time"],
             "duration_ms": int(test["duration_ms"]),
             "status": test["status"],
             "error_message": test.get("error_message"),
@@ -151,16 +150,19 @@ def load_raw_data(**context) -> dict:
 
 def populate_staging(**context) -> dict:
     """Populate staging tables from raw data."""
-    logger.info("[STAGING] Starting staging layer enrichment (scenario_id lookup)")
+    logger.info("[STAGING] Starting staging layer enrichment (app_name and scenario_name lookup)")
     
     with DatabaseConnection() as db:
-        # SQL to join raw with dim_test_scenarios and insert into staging
+        # SQL to copy raw into staging and enrich with app_name and scenario_name from dimensions
+        # Uses LEFT JOINs to preserve all raw records even if dimension lookups fail
         sql = """
-        INSERT INTO resiliency.stg_resiliency_tests (app_id, scenario_name, scenario_id, start_time, end_time, duration_ms, status, error_message, metadata_json)
+        INSERT INTO resiliency.stg_resiliency_tests (test_id, app_id, app_name, scenario_id, scenario_name, start_time, end_time, duration_ms, status, error_message, metadata_json)
         SELECT 
+            raw.test_id,
             raw.app_id,
-            raw.scenario_name,
-            ds.scenario_id,
+            da.app_name,
+            raw.scenario_id,
+            ds.scenario_name,
             raw.start_time,
             raw.end_time,
             raw.duration_ms,
@@ -168,9 +170,12 @@ def populate_staging(**context) -> dict:
             raw.error_message,
             raw.metadata_json
         FROM resiliency.raw_resiliency_tests raw
+        LEFT JOIN resiliency.dim_applications da 
+            ON raw.app_id = da.app_id
         LEFT JOIN resiliency.dim_test_scenarios ds 
-            ON raw.scenario_name = ds.scenario_name
+            ON raw.scenario_id = ds.scenario_id
         WHERE raw.created_at::date = CURRENT_DATE
+        ON CONFLICT (test_id) DO NOTHING
         """
         db.execute_query(sql)
         
@@ -179,7 +184,21 @@ def populate_staging(**context) -> dict:
         count_result = db.fetch_query(count_query)
         rows_affected = count_result[0][0] if count_result else 0
     
-    logger.info(f"[STAGING] Successfully enriched {rows_affected} records with scenario_id via LEFT JOIN")
+        # Check for records with missing dimension lookups (data quality issue)
+        unmapped_app_query = "SELECT COUNT(*) FROM resiliency.stg_resiliency_tests WHERE app_name IS NULL AND DATE(created_at) = CURRENT_DATE"
+        unmapped_app_result = db.fetch_query(unmapped_app_query)
+        unmapped_app_count = unmapped_app_result[0][0] if unmapped_app_result else 0
+        
+        unmapped_scenario_query = "SELECT COUNT(*) FROM resiliency.stg_resiliency_tests WHERE scenario_name IS NULL AND DATE(created_at) = CURRENT_DATE"
+        unmapped_scenario_result = db.fetch_query(unmapped_scenario_query)
+        unmapped_scenario_count = unmapped_scenario_result[0][0] if unmapped_scenario_result else 0
+        
+        if unmapped_app_count > 0:
+            logger.warning(f"[STAGING] Found {unmapped_app_count} records with unmapped app_id - dim_applications may be incomplete")
+        if unmapped_scenario_count > 0:
+            logger.warning(f"[STAGING] Found {unmapped_scenario_count} records with unmapped scenario_id - dim_test_scenarios may be incomplete")
+    
+    logger.info(f"[STAGING] Successfully enriched {rows_affected} records with app_name and scenario_name via LEFT JOIN")
     logger.info("[STAGING] Medallion architecture: Raw (immutable) -> Staging (enriched) complete")
 
     return {"status": "success", "rows_staged": rows_affected}
@@ -189,12 +208,18 @@ def generate_metrics(**context) -> dict:
     logger.info("[METRICS] Starting daily metrics aggregation from staging layer")
     
     ti = context["task_instance"]
-    # Read enriched data from staging table instead of XCom
+    execution_date = context["execution_date"]
+    metric_date = execution_date.date()
+    
+    logger.info(f"[METRICS] Processing metrics for execution_date={metric_date}")
+    
+    # Read enriched data from staging table 
     with DatabaseConnection() as db:
-        query = """
+        # Filter by the execution_date (which is the date of data being processed, not today if ran at midnight
+        query = f"""
         SELECT app_id, scenario_id, start_time, end_time, duration_ms, status
         FROM resiliency.stg_resiliency_tests
-        WHERE DATE(start_time) = CURRENT_DATE
+        WHERE DATE(start_time) = '{metric_date}'::date
         ORDER BY start_time
         """
         rows = db.fetch_query(query)
@@ -243,16 +268,18 @@ def generate_metrics(**context) -> dict:
 
     logger.info(f"[METRICS] Serialized {len(metrics_records)} metric records for database insertion")
 
-    # Insert into database
+    # Upsert into database (update if exists, insert if new)
     with DatabaseConnection() as db:
-        rows_inserted = db.insert_records(
-            table="fact_resiliency_metrics", records=metrics_records
+        rows_affected = db.upsert_records(
+            table="fact_resiliency_metrics",
+            records=metrics_records,
+            unique_keys=["app_id", "metric_date"]
         )
     
-    logger.info(f"[METRICS] Successfully inserted {rows_inserted} metric rows into fact_resiliency_metrics")
+    logger.info(f"[METRICS] Successfully upserted {rows_affected} metric rows into fact_resiliency_metrics")
     logger.info(f"[METRICS] Gold layer (Mart) complete - data ready for reporting and visualization")
 
-    return {"status": "success", "metrics_inserted": rows_inserted}
+    return {"status": "success", "metrics_inserted": rows_affected}
 
 
 def validate_data_quality(**context) -> dict:

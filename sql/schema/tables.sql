@@ -24,10 +24,9 @@ CREATE TABLE IF NOT EXISTS resiliency.dim_test_scenarios (
 
 -- Raw Fact Table: Resiliency Tests
 CREATE TABLE IF NOT EXISTS resiliency.raw_resiliency_tests (
-    test_id SERIAL PRIMARY KEY,
+    test_id UUID PRIMARY KEY,  -- Unique identifier from source system
     app_id INT NOT NULL,
-    scenario_name VARCHAR(255),
-    scenario_id INT,
+    scenario_id INT NOT NULL,  -- Source provides normalized ID
     start_time TIMESTAMP NOT NULL,
     end_time TIMESTAMP NOT NULL,
     duration_ms INT NOT NULL,
@@ -36,15 +35,17 @@ CREATE TABLE IF NOT EXISTS resiliency.raw_resiliency_tests (
     metadata_json JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (app_id) REFERENCES resiliency.dim_applications(app_id),
-    FOREIGN KEY (scenario_id) REFERENCES resiliency.dim_test_scenarios(scenario_id)
+    FOREIGN KEY (scenario_id) REFERENCES resiliency.dim_test_scenarios(scenario_id),
+    UNIQUE (test_id)
 );
 
--- Staging Fact Table: Resiliency Tests (cleaned/validated)
+-- Staging Fact Table: Resiliency Tests (cleaned/validated/enriched)
 CREATE TABLE IF NOT EXISTS resiliency.stg_resiliency_tests (
-    test_id SERIAL PRIMARY KEY,
+    test_id UUID PRIMARY KEY,  -- Unique identifier from source system
     app_id INT NOT NULL,
-    scenario_name VARCHAR(255),
-    scenario_id INT,
+    app_name VARCHAR(255),  -- Enriched from dimension for convenience
+    scenario_id INT NOT NULL,  -- Direct reference to dimension
+    scenario_name VARCHAR(255),  -- Enriched from dimension for convenience
     start_time TIMESTAMP NOT NULL,
     end_time TIMESTAMP NOT NULL,
     duration_ms INT NOT NULL,
@@ -53,7 +54,8 @@ CREATE TABLE IF NOT EXISTS resiliency.stg_resiliency_tests (
     metadata_json JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (app_id) REFERENCES resiliency.dim_applications(app_id),
-    FOREIGN KEY (scenario_id) REFERENCES resiliency.dim_test_scenarios(scenario_id)
+    FOREIGN KEY (scenario_id) REFERENCES resiliency.dim_test_scenarios(scenario_id),
+    UNIQUE (test_id)
 );
 
 -- Mart: Resiliency Metrics (aggregated)

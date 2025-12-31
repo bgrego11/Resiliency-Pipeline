@@ -47,13 +47,15 @@ resiliency-pipeline/
 - **dim_test_scenarios**: 6 test scenarios (Database Failover, Network Latency, Service Restart, Memory Pressure, CPU Spike, Dependency Timeout)
 
 ### Facts (Medallion Layers)
-- **raw_resiliency_tests** (Bronze): Raw fact table with all test results as received, including scenario_name for traceability
-- **stg_resiliency_tests** (Silver): Enriched staging layer 
+- **raw_resiliency_tests** (Bronze): Raw fact table with all test results as received from the source system, storing only what the source provides (test_id, app_id, scenario_id, timestamps, status)
+- **stg_resiliency_tests** (Silver): Enriched staging layer that adds human-readable names (app_name, scenario_name) by joining with dimensions
 - **fact_resiliency_metrics** (Gold): Daily aggregated metrics by application with uptime %, MTTR, RTO compliance
 
 ### Key Design Decisions
-- **Separate test_ids**: Raw and staging have independent auto-generated IDs to maintain immutability of raw layer
-- **Immutable raw layer**: Audit trail preserved, supports data lineage and re-processing
+- **Test ID Strategy**: Uses UUID (test_id) as the source system's unique identifier, preventing duplicates on re-runs with ON CONFLICT handling
+- **Enrichment in Staging**: All business-friendly names (app_name, scenario_name) are added during the staging transformation via SQL JOINs with dimensions
+- **Immutable Raw Layer**: Raw layer never loses records or modifies data—preserves complete audit trail and supports re-processing
+- **Data Quality Safeguards**: Staging detects and logs unmapped scenarios/applications, alerting to dimension completeness issues
 
 ## Data Pipeline Flow
 
@@ -95,17 +97,17 @@ Data quality checks on transformed data:
 
 #### 4. **Load Raw Data** (load_raw_data) - *Parallel*
 Persists cleaned data to raw table:
-- Inserts into `raw_resiliency_tests` with scenario_id = NULL
-- Includes scenario_name for later enrichment
+- Inserts into `raw_resiliency_tests`
 - Maintains immutable audit trail
 - Returns: Number of rows inserted
 
 #### 5. **Populate Staging** (populate_staging)
-Enriches raw data via SQL transformation:
-- SQL LEFT JOIN: raw_resiliency_tests ⟕ dim_test_scenarios on scenario_name
-- Inserts enriched records into `stg_resiliency_tests` with populated scenario_id
-- Auto-generates new test_ids in staging (separate from raw)
-- Returns: Number of rows staged
+Enriches raw data with business context via SQL transformation:
+- LEFT JOINs raw_resiliency_tests with dim_test_scenarios to add scenario_name
+- LEFT JOINs raw_resiliency_tests with dim_applications to add app_name
+- Both joins use LEFT to preserve all raw records even if dimension lookups fail (data quality safeguard)
+- Inserts enriched records into `stg_resiliency_tests` with both scenario_id/app_id and their friendly names
+- Returns: Number of rows staged, with warnings if any dimension mismatches detected
 
 #### 6. **Generate Metrics** (generate_metrics)
 Aggregates daily metrics from staging:
@@ -280,11 +282,11 @@ test_ids: 1,2,3...            test_ids: 1,2,3...                  uptime %
 ```
 
 **Benefits of This Approach:**
-- ✅ Raw layer never changes → complete audit trail
-- ✅ Staging handles all business logic transformations
-- ✅ Separate test_ids maintain layer independence
-- ✅ Easy to re-process staging without losing raw data
-- ✅ Scales to multiple downstream marts
+- Raw layer never changes → complete audit trail
+- Staging handles all business logic transformations
+- Separate test_ids maintain layer independence
+- Easy to re-process staging without losing raw data
+- Scales to multiple downstream marts
 
 ### Python Code Quality
 - **Object-oriented design**: Reusable Simulator, Transformer, DatabaseConnection classes
@@ -303,51 +305,33 @@ test_ids: 1,2,3...            test_ids: 1,2,3...                  uptime %
 ## Portfolio Showcase
 
 ### Data Engineering Capabilities
-✅ **Data Generation** - Synthetic data with realistic distributions (85% pass rate, variable durations)
-✅ **Data Validation** - Multi-layer checks (required fields, type validation, range validation)
-✅ **Data Transformation** - Column derivation, enrichment, aggregation using pandas
-✅ **ETL Pipeline** - Extract → Transform → Load with error handling
-✅ **Data Architecture** - Medallion pattern with raw, staging, and mart layers
+- **Data Generation** - Synthetic data with realistic distributions (85% pass rate, variable durations)
+- **Data Validation** - Multi-layer checks (required fields, type validation, range validation)
+- **Data Transformation** - Column derivation, enrichment, aggregation using pandas
+- **ETL Pipeline** - Extract → Transform → Load with error handling
+- **Data Architecture** - Medallion pattern with raw, staging, and mart layers
 
 ### Python Skills
-✅ **OOP Design** - Simulator, Transformer, DatabaseConnection classes with proper encapsulation
-✅ **Type Hints** - Full type annotations across all modules
-✅ **Context Managers** - Resource management with `with` statements
-✅ **Error Handling** - Validation, logging, graceful degradation
-✅ **Pandas Proficiency** - DataFrames, aggregation, data wrangling
+- **OOP Design** - Simulator, Transformer, DatabaseConnection classes with proper encapsulation
+- **Type Hints** - Full type annotations across all modules
+- **Context Managers** - Resource management with `with` statements
+- **Error Handling** - Validation, logging, graceful degradation
+- **Pandas Proficiency** - DataFrames, aggregation, data wrangling
 
 ### SQL Mastery
-✅ **Schema Design** - Normalized dimensions, fact tables, proper keys and constraints
-✅ **Complex Queries** - LEFT JOINs, aggregation, GROUP BY operations
-✅ **Performance** - Strategic indexing and query optimization
-✅ **Data Integrity** - Foreign keys, check constraints, cascading operations
-✅ **Best Practices** - Comments, proper naming, logical organization
+- **Schema Design** - Normalized dimensions, fact tables, proper keys and constraints
+- **Complex Queries** - LEFT JOINs, aggregation, GROUP BY operations
+- **Performance** - Strategic indexing and query optimization
+- **Data Integrity** - Foreign keys, check constraints, cascading operations
+- **Best Practices** - Comments, proper naming, logical organization
 
 ### Orchestration & DevOps
-✅ **Apache Airflow** - DAG design, task dependencies, error handling
-✅ **Docker & Compose** - Multi-container orchestration, volume management, health checks
-✅ **CI/DevOps** - Environment configuration, secrets management, container networking
-✅ **Monitoring** - Logging, health checks, operational commands
+- **Apache Airflow** - DAG design, task dependencies, error handling
+- **Docker & Compose** - Multi-container orchestration, volume management, health checks
+- **CI/DevOps** - Environment configuration, secrets management, container networking
+- **Monitoring** - Logging, health checks, operational commands
 
-## Next Steps: Adding Reporting
 
-The pipeline is data-ready for visualization. Next steps to complete the portfolio:
-
-### Option 1: Metabase (Recommended for Portfolio)
-- Lightweight, open-source BI tool
-- Docker image available: `docker pull metabase/metabase`
-- Pre-built dashboards and SQL-based reporting
-- Great for portfolio demonstration
-
-### Option 2: Streamlit (Python-Based)
-- Build interactive dashboards with Python
-- Perfect complement to data engineering skills
-- Deploy easily to cloud
-
-### Option 3: Looker Studio (Free)
-- Connect directly to PostgreSQL
-- Minimal setup required
-- Professional-looking reports
 
 ### Recommended Queries for Dashboards
 ```sql
@@ -361,9 +345,18 @@ SELECT app_id, metric_date, rto_compliant FROM resiliency.fact_resiliency_metric
 SELECT app_id, AVG(mttr_minutes) as avg_mttr FROM resiliency.fact_resiliency_metrics GROUP BY app_id;
 
 -- Failed tests with details
-SELECT raw.app_id, raw.scenario_name, raw.start_time, raw.duration_ms, raw.error_message 
-FROM resiliency.stg_resiliency_tests raw WHERE raw.status = 'failed' ORDER BY raw.start_time DESC LIMIT 50;
+SELECT srt.app_id, srt.scenario_name, srt.start_time, srt.duration_ms, srt.error_message 
+FROM resiliency.stg_resiliency_tests srt WHERE srt.status = 'failed' ORDER BY srt.start_time DESC LIMIT 50;
 ```
+
+## Deployment
+
+### Local Development (Current Setup)
+- Runs on your machine via Docker Compose
+- PostgreSQL database stored locally
+- Perfect for development and testing
+
+
 
 ## Testing
 
@@ -400,11 +393,12 @@ docker-compose exec -T postgres psql -U airflow -d resiliency_db -c "SELECT 1"
 docker-compose exec -T postgres psql -U airflow -d resiliency_db -c "\conninfo"
 ```
 
-### Staging Table Empty (No Scenario_ids)
+### Staging Table Empty (Missing Enrichment)
 - Ensure `populate_staging` task completes successfully
-- Verify `dim_test_scenarios` table has data (6 scenarios)
-- Check scenario_name values match between raw and dimensions
-- Look for LEFT JOIN logging in task logs
+- Verify both dimension tables have data (5 applications, 6 scenarios)
+- Check that raw_resiliency_tests has records before staging runs
+- Look for LEFT JOIN warnings in task logs about unmapped app_ids or scenario_ids
+- If records exist in raw but not staging, check the `ON CONFLICT (test_id) DO NOTHING` logic isn't blocking inserts
 
 ### Memory or CPU Issues
 ```bash
@@ -421,4 +415,4 @@ MIT License - Feel free to use this as a portfolio project
 
 ## Contact
 
-Created by Ben | January 2025
+Created by Ben Gregory | December 2025
